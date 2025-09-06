@@ -12,6 +12,7 @@
 #include "InputActionValue.h"
 #include "OnlineSubsystem.h"
 #include "OnlineSessionSettings.h"
+#include "Online/OnlineSessionNames.h"
 
 DEFINE_LOG_CATEGORY(LogTemplateCharacter);
 
@@ -19,7 +20,8 @@ DEFINE_LOG_CATEGORY(LogTemplateCharacter);
 // AMultiplayer_PluginCharacter
 
 AMultiplayer_PluginCharacter::AMultiplayer_PluginCharacter():
-	CreateSessionCompleteDelegate(FOnCreateSessionCompleteDelegate::CreateUObject(this, &ThisClass::OnCreateSessionComplete))
+	CreateSessionCompleteDelegate(FOnCreateSessionCompleteDelegate::CreateUObject(this, &ThisClass::OnCreateSessionComplete)),
+	FindSessionsCompleteDelegate(FOnFindSessionsCompleteDelegate::CreateUObject(this, &ThisClass::OnFindSessionsComplete))
 {
 
 	// Set size for collision capsule
@@ -102,7 +104,24 @@ void AMultiplayer_PluginCharacter::CreateGameSession()
 	OnlineSessionInterface->CreateSession(*LocalPlayer->GetPreferredUniqueNetId(), NAME_GameSession, *SessionSettings);
 }
 
+void AMultiplayer_PluginCharacter::JoinGameSession()
+{
+	// Find game sessions
+	if (!OnlineSessionInterface.IsValid())
+	{
+		return;
+	}
 
+	OnlineSessionInterface->AddOnFindSessionsCompleteDelegate_Handle(FindSessionsCompleteDelegate);
+
+	SessionSearch = MakeShareable(new FOnlineSessionSearch());
+	SessionSearch->MaxSearchResults = 10000;
+	SessionSearch->bIsLanQuery = false;
+	SessionSearch->QuerySettings.Set(SEARCH_PRESENCE, true, EOnlineComparisonOp::Equals);
+
+	const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
+	OnlineSessionInterface->FindSessions(*LocalPlayer->GetPreferredUniqueNetId(), SessionSearch.ToSharedRef());
+}
 void AMultiplayer_PluginCharacter::OnCreateSessionComplete(FName SessionName, bool bWasSuccessful)
 {
 	if (bWasSuccessful)
@@ -132,6 +151,23 @@ void AMultiplayer_PluginCharacter::OnCreateSessionComplete(FName SessionName, bo
 }
 
 
+void AMultiplayer_PluginCharacter::OnFindSessionsComplete(bool bWasSuccessful)
+{
+	for (auto Result : SessionSearch->SearchResults)
+	{
+		FString Id = Result.GetSessionIdStr();
+		FString User = Result.Session.OwningUserName;
+		if (GEngine)
+		{
+			GEngine->AddOnScreenDebugMessage(
+				-1,
+				15.f,
+				FColor::Cyan,
+				FString::Printf(TEXT("Id: %s, User: %s"), *Id, *User)
+			);
+		}
+	}
+}
 //////////////////////////////////////////////////////////////////////////
 // Input
 
