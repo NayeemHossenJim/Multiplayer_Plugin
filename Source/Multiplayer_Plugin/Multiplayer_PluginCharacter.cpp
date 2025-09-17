@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+	// Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Multiplayer_PluginCharacter.h"
 #include "Engine/LocalPlayer.h"
@@ -82,34 +82,59 @@ void AMultiplayer_PluginCharacter::CreateGameSession()
 {
 	if (!OnlineSessionInterface.IsValid())
 	{
+		if (GEngine)
+		{
+			GEngine->AddOnScreenDebugMessage(-1, 10.f, FColor::Red, TEXT("OnlineSessionInterface invalid"));
+		}
 		return;
 	}
 
-	auto ExistingSession = OnlineSessionInterface->GetNamedSession(NAME_GameSession);
-	if (ExistingSession != nullptr)
+	// If a session already exists, destroy first and return. Call CreateGameSession again after destroy completes.
+	if (OnlineSessionInterface->GetNamedSession(NAME_GameSession) != nullptr)
 	{
 		OnlineSessionInterface->DestroySession(NAME_GameSession);
+		if (GEngine)
+		{
+			GEngine->AddOnScreenDebugMessage(-1, 5.f, FColor::Orange, TEXT("Existing session found. Destroying before creating a new one."));
+		}
+		return;
 	}
 
 	OnlineSessionInterface->AddOnCreateSessionCompleteDelegate_Handle(CreateSessionCompleteDelegate);
 
+	IOnlineSubsystem* Subsystem = IOnlineSubsystem::Get();
+	const bool bIsNullSubsystem = (Subsystem && Subsystem->GetSubsystemName().ToString().Equals(TEXT("NULL"), ESearchCase::IgnoreCase));
+
 	TSharedPtr<FOnlineSessionSettings> SessionSettings = MakeShareable(new FOnlineSessionSettings());
-	SessionSettings->bIsLANMatch = false;
+	SessionSettings->bIsLANMatch = bIsNullSubsystem;              // LAN for NULL OSS
 	SessionSettings->NumPublicConnections = 4;
 	SessionSettings->bAllowJoinInProgress = true;
-	SessionSettings->bAllowJoinViaPresence = true;
 	SessionSettings->bShouldAdvertise = true;
-	SessionSettings->bUsesPresence = true;
+	SessionSettings->bUsesPresence = !bIsNullSubsystem;           // Presence only when not NULL
+	SessionSettings->bAllowJoinViaPresence = !bIsNullSubsystem;   // Presence-based join only when not NULL
 	SessionSettings->Set(FName("MatchType"), FString("FreeForAll"), EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
+
 	const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
-	OnlineSessionInterface->CreateSession(*LocalPlayer->GetPreferredUniqueNetId(), NAME_GameSession, *SessionSettings);
+
+	// Prefer UniqueNetId when valid and not NULL OSS, otherwise fall back to player index 0
+	if (LocalPlayer && LocalPlayer->GetPreferredUniqueNetId().IsValid() && !bIsNullSubsystem)
+	{
+		OnlineSessionInterface->CreateSession(*LocalPlayer->GetPreferredUniqueNetId(), NAME_GameSession, *SessionSettings);
+	}
+	else
+	{
+		OnlineSessionInterface->CreateSession(0, NAME_GameSession, *SessionSettings);
+	}
 }
 
 void AMultiplayer_PluginCharacter::JoinGameSession()
 {
-	// Find game sessions
 	if (!OnlineSessionInterface.IsValid())
 	{
+		if (GEngine)
+		{
+			GEngine->AddOnScreenDebugMessage(-1, 10.f, FColor::Red, TEXT("OnlineSessionInterface invalid"));
+		}
 		return;
 	}
 
@@ -117,12 +142,27 @@ void AMultiplayer_PluginCharacter::JoinGameSession()
 
 	SessionSearch = MakeShareable(new FOnlineSessionSearch());
 	SessionSearch->MaxSearchResults = 10000;
-	SessionSearch->bIsLanQuery = false;
-	SessionSearch->QuerySettings.Set(SEARCH_PRESENCE, true, EOnlineComparisonOp::Equals);
+
+	IOnlineSubsystem* Subsystem = IOnlineSubsystem::Get();
+	const bool bIsNullSubsystem = (Subsystem && Subsystem->GetSubsystemName().ToString().Equals(TEXT("NULL"), ESearchCase::IgnoreCase));
+
+	SessionSearch->bIsLanQuery = bIsNullSubsystem;
+	if (!bIsNullSubsystem)
+	{
+		SessionSearch->QuerySettings.Set(SEARCH_PRESENCE, true, EOnlineComparisonOp::Equals);
+	}
 
 	const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
-	OnlineSessionInterface->FindSessions(*LocalPlayer->GetPreferredUniqueNetId(), SessionSearch.ToSharedRef());
+	if (LocalPlayer && LocalPlayer->GetPreferredUniqueNetId().IsValid() && !bIsNullSubsystem)
+	{
+		OnlineSessionInterface->FindSessions(*LocalPlayer->GetPreferredUniqueNetId(), SessionSearch.ToSharedRef());
+	}
+	else
+	{
+		OnlineSessionInterface->FindSessions(0, SessionSearch.ToSharedRef());
+	}
 }
+
 void AMultiplayer_PluginCharacter::OnCreateSessionComplete(FName SessionName, bool bWasSuccessful)
 {
 	if (bWasSuccessful)
@@ -159,42 +199,45 @@ void AMultiplayer_PluginCharacter::OnCreateSessionComplete(FName SessionName, bo
 
 void AMultiplayer_PluginCharacter::OnFindSessionsComplete(bool bWasSuccessful)
 {
-	if (!OnlineSessionInterface.IsValid())
+	if (!OnlineSessionInterface.IsValid() || !SessionSearch.IsValid())
 	{
 		return;
 	}
 
-	for (auto Result : SessionSearch->SearchResults)
+	IOnlineSubsystem* Subsystem = IOnlineSubsystem::Get();
+	const bool bIsNullSubsystem = (Subsystem && Subsystem->GetSubsystemName().ToString().Equals(TEXT("NULL"), ESearchCase::IgnoreCase));
+
+	for (const auto& Result : SessionSearch->SearchResults)
 	{
 		FString Id = Result.GetSessionIdStr();
 		FString User = Result.Session.OwningUserName;
 		FString MatchType;
 		Result.Session.SessionSettings.Get(FName("MatchType"), MatchType);
+
 		if (GEngine)
 		{
-			GEngine->AddOnScreenDebugMessage(
-				-1,
-				15.f,
-				FColor::Cyan,
-				FString::Printf(TEXT("Id: %s, User: %s"), *Id, *User)
-			);
+			GEngine->AddOnScreenDebugMessage(-1, 10.f, FColor::Cyan, FString::Printf(TEXT("Id: %s, User: %s"), *Id, *User));
 		}
+
 		if (MatchType == FString("FreeForAll"))
 		{
 			if (GEngine)
 			{
-				GEngine->AddOnScreenDebugMessage(
-					-1,
-					15.f,
-					FColor::Cyan,
-					FString::Printf(TEXT("Joining Match Type: %s"), *MatchType)
-				);
+				GEngine->AddOnScreenDebugMessage(-1, 10.f, FColor::Cyan, FString::Printf(TEXT("Joining Match Type: %s"), *MatchType));
 			}
 
 			OnlineSessionInterface->AddOnJoinSessionCompleteDelegate_Handle(JoinSessionCompleteDelegate);
 
 			const ULocalPlayer* LocalPlayer = GetWorld()->GetFirstLocalPlayerFromController();
-			OnlineSessionInterface->JoinSession(*LocalPlayer->GetPreferredUniqueNetId(), NAME_GameSession, Result);
+			if (LocalPlayer && LocalPlayer->GetPreferredUniqueNetId().IsValid() && !bIsNullSubsystem)
+			{
+				OnlineSessionInterface->JoinSession(*LocalPlayer->GetPreferredUniqueNetId(), NAME_GameSession, Result);
+			}
+			else
+			{
+				OnlineSessionInterface->JoinSession(0, NAME_GameSession, Result);
+			}
+			break; // Join the first matching result
 		}
 	}
 }
