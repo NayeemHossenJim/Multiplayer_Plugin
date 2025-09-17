@@ -179,7 +179,7 @@ void AMultiplayer_PluginCharacter::OnCreateSessionComplete(FName SessionName, bo
 		UWorld* World = GetWorld();
 		if (World)
 		{
-			World->ServerTravel(FString("/Game/ThirdPersonCPP/Maps/Lobby?listen"));
+			World->ServerTravel(FString("/Game/ThirdPerson/Maps/Lobby?listen"));
 		}
 	}
 	else
